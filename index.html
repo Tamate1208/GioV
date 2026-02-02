@@ -285,6 +285,7 @@
     </main>
 
     <script>
+        let suppressUpdateOnce = false;
         // --- 住所検索 ---
         async function searchAddress() {
             const input = document.getElementById("addressInput").value;
@@ -496,6 +497,7 @@
                 center: [34.396, 132.459],
                 zoom: 10,
                 zoomControl: false,
+                closePopupOnClick: false  // ★追加：地図クリックで自動クローズしない
             });
             L.control.zoom({ position: "bottomright" }).addTo(map);
             L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -503,7 +505,8 @@
             }).addTo(map);
             markersLayer = L.layerGroup().addTo(map);
             updateVisibleData();
-            map.on("moveend", updateVisibleData);
+            //map.on("moveend", updateVisibleData);
+            map.on("zoomend", updateVisibleData);  // ズーム変更時だけ再計算
             map.on("zoomend", updateMarkerTooltipVisibility);
         }
 
@@ -619,6 +622,12 @@
 
         function updateVisibleData() {
             const loading = document.getElementById("loading");
+            
+            // ★1回だけ更新をスキップするフラグ
+            if (suppressUpdateOnce) {
+                suppressUpdateOnce = false;
+                return;
+            }
 
             if (updateTimer !== null) {
                 clearTimeout(updateTimer);
@@ -648,17 +657,22 @@
             }, 200);
         }
 
-        window.focusMarker = function (uid, lat, lng) {
-            const marker = markersByUid.get(uid);
+                window.focusMarker = function (uid, lat, lng) {
+                    const marker = markersByUid.get(uid);
+                    if (!marker) return;
 
-            map.flyTo([lat, lng], 15, { duration: 0.8 });
+                    const currentZoom = map.getZoom();
+                    const targetZoom = currentZoom < 15 ? 15 : currentZoom; // 15 までは自動ズームイン
 
-            if (!marker) return;
+                    // 次の moveend で updateVisibleData をスキップ
+                    suppressUpdateOnce = true;
 
-            setTimeout(() => {
-                marker.openPopup();
-            }, 900); // flyTo 完了後にポップアップ [web:122]
-        };
+                    // ズームを固定したまま、中心だけ移動
+                    map.setView([lat, lng], currentZoom, { animate: true });
+
+                    // すぐにポップアップを開く
+                    marker.openPopup();
+                };
 
         function updateMarkerTooltipVisibility() {
             const show = map.getZoom() >= 14;
