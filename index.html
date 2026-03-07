@@ -219,6 +219,9 @@
                 <div class="w-10 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-600"></div>
             </label>
             <span class="text-xs font-medium text-gray-700">地質図</span>
+            <button id="legendBtn" onclick="toggleLegend()" class="hidden ml-1 text-[10px] bg-white border border-gray-300 text-gray-600 rounded px-2 py-0.5 hover:bg-gray-50 transition shadow-sm flex items-center gap-1">
+                <span class="font-bold">?</span> 凡例
+            </button>
 
             <!-- 土砂災害トグル -->
             <label class="relative inline-flex items-center cursor-pointer">
@@ -317,6 +320,21 @@
         </div>
     </main>
 
+    <!-- 凡例パネル -->
+    <div id="legendPanel" class="hidden absolute bottom-8 right-2 md:right-4 z-[2000] bg-white/95 backdrop-blur p-3 rounded-lg shadow-xl border border-gray-200 w-72 max-h-[50vh] flex flex-col transition-all">
+        <div class="flex justify-between items-center mb-2 border-b border-gray-200 pb-2 flex-none">
+            <h3 class="text-xs font-bold text-gray-700">地点の地質情報 (シームレス地質図)</h3>
+            <button onclick="toggleLegend()" class="text-gray-400 hover:text-gray-600 p-1">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+            </button>
+        </div>
+        <div id="legendContent" class="overflow-y-auto flex-grow min-h-0 bg-white text-xs">
+            <div class="text-gray-400 p-4 text-center">地図上のマーカーを選択すると<br>ここに地質詳細が表示されます</div>
+        </div>
+    </div>
+
     <script>
         let suppressUpdateOnce = false;
         // --- 住所検索 ---
@@ -375,11 +393,70 @@
             }, 300);
         }
 
+        // --- 凡例表示 ---
+        function toggleLegend() {
+            const panel = document.getElementById('legendPanel');
+            panel.classList.toggle('hidden');
+        }
+
+        // --- 地質情報取得 (シームレス地質図V2 API) ---
+        async function updateLegendContent(lat, lng) {
+            const panel = document.getElementById('legendPanel');
+            const content = document.getElementById('legendContent');
+            
+            // パネルを表示（隠れている場合）
+            panel.classList.remove('hidden');
+            // ヘッダーの凡例ボタンも表示状態にする
+            document.getElementById('legendBtn').classList.remove('hidden');
+
+            content.innerHTML = '<div class="flex justify-center items-center py-4 text-blue-500"><svg class="animate-spin h-5 w-5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg></div>';
+
+            try {
+                // 座標を指定して凡例情報を取得
+                const response = await fetch(`https://gbank.gsj.jp/seamless/v2/api/1.3.1/legend.json?point=${lat},${lng}`);
+                if (!response.ok) throw new Error('Network response was not ok');
+                const data = await response.json();
+
+                if (data) {
+                    const title = data.title || '名称不明';
+                    const desc = data.description || '';
+                    const group = data.group || '';
+                    const age = data.formationAge || '';
+                    const lithology = data.lithology || '';
+                    const color = data.fill || '#cccccc';
+
+                    content.innerHTML = `
+                        <div class="space-y-2">
+                            <div class="flex items-start gap-2 border-b border-gray-100 pb-2">
+                                <div class="w-6 h-6 rounded shadow-sm flex-none mt-1" style="background-color: ${color}; border: 1px solid rgba(0,0,0,0.1);"></div>
+                                <div>
+                                    <div class="font-bold text-sm text-gray-800">${title}</div>
+                                    <div class="text-xs text-gray-500">${age}</div>
+                                </div>
+                            </div>
+                            <div class="text-xs space-y-1">
+                                <div class="flex gap-2"><span class="text-gray-400 w-8 flex-none">岩相</span><span class="text-gray-700">${lithology}</span></div>
+                                <div class="flex gap-2"><span class="text-gray-400 w-8 flex-none">区分</span><span class="text-gray-700">${group}</span></div>
+                                <div class="mt-2 text-gray-600 leading-relaxed bg-gray-50 p-2 rounded">${desc}</div>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    content.innerHTML = '<div class="text-gray-400 text-center py-4">この地点の地質データはありません</div>';
+                }
+            } catch (error) {
+                console.error(error);
+                content.innerHTML = '<div class="text-red-400 text-center py-4">情報の取得に失敗しました</div>';
+            }
+        }
+
         // --- データ表示ロジック ---
         let map;
         let markersLayer;
         let allData = [];
         let updateTimer = null;
+        let selectedMarkerUid = null; // 選択中のマーカーID
+        let isUpdating = false;       // マーカー更新中フラグ
         const markersByUid = new Map();
 
         const soilNamesJp = {
@@ -538,10 +615,11 @@
             }).addTo(map);
             markersLayer = L.layerGroup().addTo(map);
             // ★土壌図レイヤー
-            const soilLayer = L.tileLayer.wms('https://gbank.gsj.jp/seamless/v2/wms?', {
-                layers: 'area',           // ポリゴンレイヤ
+            const soilLayer = L.tileLayer.wms('https://ows.gsj.jp/ows/seamlessv2', {
+                layers: 'seamlessV2_poly',           // ポリゴンレイヤ
                 format: 'image/png',
                 transparent: true,
+                opacity: 0.6,
                 attribution: 'GSJ, AIST'
             });
 
@@ -552,16 +630,22 @@
                     layers: '28,29',
                     format: 'image/png',
                     transparent: true,
+                    opacity: 0.6,
                     attribution: '広島県 土砂災害ポータル'
                 }
             );
 
             // トグル機能
             document.getElementById('soilToggle').addEventListener('change', function() {
+                const legendBtn = document.getElementById('legendBtn');
+                const legendPanel = document.getElementById('legendPanel');
                 if (this.checked) {
                     soilLayer.addTo(map);
+                    legendBtn.classList.remove('hidden');
                 } else {
                     map.removeLayer(soilLayer);
+                    legendBtn.classList.add('hidden');
+                    legendPanel.classList.add('hidden');
                 }
             });
 
@@ -580,11 +664,25 @@
         }
 
         function renderMarkers(data) {
+            isUpdating = true; // 更新開始（popupcloseイベントでの選択解除を防ぐ）
             markersLayer.clearLayers();
             markersByUid.clear();
 
             data.forEach((p) => {
-                const marker = L.marker([p.lat, p.lng]);
+                // 最上層の土質を取得してアイコンの色を決定
+                const topLayer = p.layers && p.layers.length > 0 ? p.layers[0] : null;
+                const soilType = topLayer ? topLayer.type : 'Other';
+                // 定義済みの土質クラスがあれば使い、なければグレーにする
+                const typeClass = soilNamesJp[soilType] ? `soil-${soilType}` : 'bg-gray-400';
+
+                const customIcon = L.divIcon({
+                    className: 'bg-transparent', // デフォルトのスタイルを無効化
+                    html: `<div class="w-4 h-4 rounded-full border-2 border-white shadow-md ${typeClass}"></div>`,
+                    iconSize: [16, 16],
+                    iconAnchor: [8, 8] // 中心を座標に合わせる
+                });
+
+                const marker = L.marker([p.lat, p.lng], { icon: customIcon });
                 const uid = p.uid ?? p.xmlFileName ?? p.id;
                 marker.dataUid = uid;
                 markersByUid.set(uid, marker);
@@ -629,8 +727,8 @@
                柱状図PDFを開く (新しいタブ)
              </a>`
                     : `<div class="mt-2 text-xs text-gray-400">対応するPDFが見つかりません</div>`;
-
-                marker.bindPopup(`
+                
+                const popupContent = `
           <div class="min-w-[250px] text-xs">
             <div class="font-bold text-blue-700 text-sm">${p.id}</div>
             <p class="text-xs text-gray-600 mb-1">採取日: ${p.date || "-"
@@ -646,11 +744,25 @@
             <ul class="list-none p-0 bg-gray-50 rounded p-2">${layerDetails}</ul>
             ${pdfLink}
           </div>
-        `);
+        `;
+
+                // autoPan: false でポップアップオープン時の自動移動（ループの原因）を防ぐ
+                marker.bindPopup(popupContent, { autoPan: false });
+
+                marker.on('popupopen', () => {
+                    highlightListItem(uid);
+                    updateLegendContent(p.lat, p.lng); // パネルの地質情報を更新
+                });
+                marker.on('popupclose', () => clearHighlight());
 
                 markersLayer.addLayer(marker);
-            });
 
+                // 選択状態の復元
+                if (uid === selectedMarkerUid) {
+                    marker.openPopup();
+                }
+            });
+            isUpdating = false; // 更新終了
             updateMarkerTooltipVisibility();
         }
 
@@ -667,10 +779,15 @@
                     ? point.description.split("/")[1]?.trim() || point.description
                     : "";
                 const uid = point.uid ?? point.xmlFileName ?? point.id;
+                const isSelected = uid === selectedMarkerUid;
+                const borderClass = isSelected ? "border-blue-600 border-2" : "border-gray-200";
+
                 html += `
-          <div onclick="focusMarker('${uid}', ${point.lat}, ${point.lng
-                    })"
-               class="cursor-pointer bg-white border border-gray-200 p-3 rounded-lg shadow-sm hover:border-blue-400 transition group">
+          <div id="list-item-${uid}" role="button"
+               tabindex="0"
+               onclick="focusMarker('${uid}', ${point.lat}, ${point.lng})"
+               onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); focusMarker('${uid}', ${point.lat}, ${point.lng}); }"
+               class="cursor-pointer bg-white border ${borderClass} p-3 rounded-lg shadow-sm hover:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400 transition group">
             ${createLayerChartHtml(
                         point.layers || [],
                         point.depth,
@@ -687,6 +804,33 @@
           </div>`;
             });
             listContainer.innerHTML = html;
+        }
+
+        // リスト項目の強調表示
+        function highlightListItem(uid) {
+            selectedMarkerUid = uid;
+            // 全ての項目の強調を解除
+            document.querySelectorAll('#dataList > div').forEach(el => {
+                el.classList.remove('border-blue-600', 'border-2');
+                el.classList.add('border-gray-200');
+            });
+            // 対象の項目を強調
+            const target = document.getElementById(`list-item-${uid}`);
+            if (target) {
+                target.classList.remove('border-gray-200');
+                target.classList.add('border-blue-600', 'border-2');
+                target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }
+
+        // 強調表示の解除
+        function clearHighlight() {
+            if (isUpdating) return; // マーカー再描画中のpopupcloseは無視
+            selectedMarkerUid = null;
+            document.querySelectorAll('#dataList > div').forEach(el => {
+                el.classList.remove('border-blue-600', 'border-2');
+                el.classList.add('border-gray-200');
+            });
         }
 
         function updateVisibleData() {
