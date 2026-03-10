@@ -1,0 +1,10 @@
+{
+  "extends": [
+    "development"
+  ],
+  "hints": {
+    "meta-viewport": "off",
+    "button-type": "off",
+    "axe/name-role-value": "off"
+  }
+}

@@ -401,6 +401,9 @@
 
         // --- 地質情報取得 (シームレス地質図V2 API) ---
         async function updateLegendContent(lat, lng) {
+            const soilToggle = document.getElementById('soilToggle');
+            if (!soilToggle.checked) return; // 地質図がOFFなら何もしない
+
             const panel = document.getElementById('legendPanel');
             const content = document.getElementById('legendContent');
             
