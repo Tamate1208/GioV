@@ -468,12 +468,15 @@ window.RainfallEngine = (function () {
         }
 
         const fileList = [];
+        // GitHub Pages (静的ホスティング) では server.js が動かないため /api/proxy は使用不可
+        const isGithubPages = window.location.hostname.endsWith('github.io');
         const proxies = [
-            (url) => `/api/proxy?url=${encodeURIComponent(url)}`,
+            // ローカルサーバー環境のみ: /api/proxy を使用
+            ...(!isGithubPages ? [(url) => `/api/proxy?url=${encodeURIComponent(url)}`] : []),
             (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
             (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
             (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-            (url) => url // direct
+            (url) => url // direct (CORS制限がない場合のフォールバック)
         ];
 
         for (let i = 0; i < dateList.length; i++) {

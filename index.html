@@ -1301,9 +1301,9 @@
                 const label = `${m}/${d}`;
                 const url = `https://www.bousai.pref.hiroshima.lg.jp/data/observation/${y}/${m}/${ymd}-uryo.xlsx`;
                 links.push(`
-                    <a href="${url}" target="_blank" rel="noopener noreferrer" download="${ymd}-uryo.xlsx"
+                    <a href="${url}" target="_blank" rel="noopener noreferrer"
                        class="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-800 hover:bg-blue-600 hover:text-white transition font-bold"
-                       title="${ymd}-uryo.xlsx をダウンロード">
+                       title="${ymd}-uryo.xlsx を開く（右クリック→名前を付けて保存でダウンロード）">
                         <span>📥</span> <span>${label} 定時表</span>
                     </a>
                 `);
