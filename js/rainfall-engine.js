@@ -192,41 +192,340 @@ window.RainfallEngine = (function () {
     }
 
     /**
-     * 広島県防災WEBから最新データを取得 (hiroshima-rainfall API連携)
+     * 広島県防災WEB 定時表 Excel (.xlsx) のブラウザ内直接解析 & R'実効雨量エンジン
+     * (server.js不要・SheetJSを利用してブラウザ単体で完全計算・複数日ファイル一括取込対応)
      */
-    async function updateFromHiroshimaBousaiWeb(startDate, endDate) {
-        try {
-            const res = await fetch('http://localhost:5500/api/update-data', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ start: startDate, end: endDate })
-            });
-            if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.error || 'サーバーでの取得に失敗しました');
+    async function loadCustomXlsx(input, defaultFilename = '') {
+        if (typeof XLSX === 'undefined') {
+            throw new Error('SheetJS (xlsx.full.min.js) が読み込まれていません。');
+        }
+
+        // 観測局マスタの確認・読み込み
+        if (!stations || stations.length === 0) {
+            try {
+                const resSt = await fetch('data/rainfall_stations.json');
+                if (resSt.ok) stations = await resSt.json();
+            } catch (e) {
+                console.warn('Stations master fetch failed:', e);
+            }
+        }
+
+        // 入力を配列形式に統一 [{ arrayBuffer, filename }]
+        const fileList = Array.isArray(input)
+            ? input
+            : [{ arrayBuffer: input, filename: defaultFilename }];
+
+        // シート巡回と10分刻み時系列データの抽出
+        const timeSeries = {};      // 'YYYYMMDD HH:MM' -> { [stationName]: 10minRain }
+        const orderedTimestamps = [];
+
+        fileList.forEach(fileItem => {
+            const ab = fileItem.arrayBuffer;
+            const fn = fileItem.filename || '';
+            const wb = XLSX.read(ab, { type: 'array' });
+            const sheetNames = wb.SheetNames;
+
+            // 日付の推定 (ファイル名またはシート内のテキストから抽出)
+            let baseDateStr = '';
+            const fnMatch = fn.match(/(\d{4})[-_]?(\d{2})[-_]?(\d{2})/);
+            if (fnMatch) {
+                baseDateStr = `${fnMatch[1]}${fnMatch[2]}${fnMatch[3]}`;
             }
 
-            // サーバー側で生成された最新 rainfall_data.json を取得
-            const jsonRes = await fetch('http://localhost:5500/rainfall_data.json?t=' + Date.now());
-            if (!jsonRes.ok) {
-                throw new Error('更新後データの取得に失敗しました');
-            }
-            const updatedData = await jsonRes.json();
-            datasets.latest = updatedData;
-            switchDataset('latest');
-            return { success: true, count: stations.length, range: updatedData.range };
-        } catch (e) {
-            console.warn('API update failed:', e.message);
-            throw e;
-        }
+            sheetNames.forEach((sName, sheetIdx) => {
+                const ws = wb.Sheets[sName];
+                if (!ws) return;
+                const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+                if (!data || data.length < 4) return;
+
+                // 日付の抽出 (シート内文字列から)
+                let sheetDateStr = baseDateStr;
+                if (!sheetDateStr) {
+                    for (let r = 0; r < Math.min(4, data.length); r++) {
+                        const rowText = (data[r] || []).join(' ');
+                        const m = rowText.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/) || rowText.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+                        if (m) {
+                            const y = m[1];
+                            const mo = m[2].padStart(2, '0');
+                            const d = m[3].padStart(2, '0');
+                            sheetDateStr = `${y}${mo}${d}`;
+                            break;
+                        }
+                    }
+                }
+                if (!sheetDateStr) {
+                    const now = new Date();
+                    sheetDateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+                }
+
+                // 時間列の検出 (00:10 〜 24:00 等)
+                let timeCols = []; // [{ colIdx, timeStr: 'HH:MM' }]
+
+                for (let r = 0; r < Math.min(5, data.length); r++) {
+                    const rowArr = data[r] || [];
+                    const foundCols = [];
+                    for (let c = 0; c < rowArr.length; c++) {
+                        const val = String(rowArr[c] || '').trim();
+                        const tm = val.match(/^(\d{1,2}):(\d{2})$/);
+                        if (tm) {
+                            const hh = tm[1].padStart(2, '0');
+                            const mm = tm[2];
+                            foundCols.push({ colIdx: c, timeStr: `${hh}:${mm}` });
+                        }
+                    }
+                    if (foundCols.length >= 6) {
+                        timeCols = foundCols;
+                        break;
+                    }
+                }
+
+                // 時間ヘッダーが見つからなかった場合のフォールバック（定時表1〜4の既定36列）
+                if (timeCols.length === 0) {
+                    const startHour = sheetIdx * 6;
+                    const startCol = 3; // 通常4列目から雨量
+                    for (let slot = 0; slot < 36; slot++) {
+                        const totalMin = (slot + 1) * 10;
+                        const h = Math.floor(totalMin / 60) + startHour;
+                        const m = totalMin % 60;
+                        const hh = String(h).padStart(2, '0');
+                        const mm = String(m).padStart(2, '0');
+                        timeCols.push({ colIdx: startCol + slot, timeStr: `${hh}:${mm}` });
+                    }
+                }
+
+                // 各時間スロットを時系列に登録
+                timeCols.forEach(tc => {
+                    const tsKey = `${sheetDateStr} ${tc.timeStr}`;
+                    if (!timeSeries[tsKey]) {
+                        timeSeries[tsKey] = {};
+                        orderedTimestamps.push(tsKey);
+                    }
+
+                    // 各観測局の雨量値抽出
+                    stations.forEach(st => {
+                        const rIdx = st.row - 1; // 0-indexed
+                        let rainVal = 0;
+                        if (data[rIdx] && data[rIdx][tc.colIdx] !== undefined && data[rIdx][tc.colIdx] !== null) {
+                            const raw = data[rIdx][tc.colIdx];
+                            const num = parseFloat(String(raw).replace(/[^0-9.-]/g, ''));
+                            if (!isNaN(num) && num >= 0) rainVal = num;
+                        }
+                        timeSeries[tsKey][st.name] = rainVal;
+                    });
+                });
+            });
+        });
+
+        // タイムスタンプ順にソート（重複排除）
+        const uniqueTimestamps = Array.from(new Set(orderedTimestamps)).sort();
+
+        // 半減期パラメータ (短期: 1.5h = 90min, 長期: 72h = 4320min)
+        const alpha = Math.pow(0.5, 10 / 90);      // 約 0.92587
+        const beta = Math.pow(0.5, 10 / 4320);     // 約 0.998396
+
+        // 局ごとの逐次実効雨量保持用
+        const runningR = {};
+        const timeSeriesRprime = {};
+        const stationStats = {};
+
+        stations.forEach(s => {
+            runningR[s.name] = { r: 0, R: 0, history10m: [], cumulative: 0 };
+            stationStats[s.row] = {
+                row: s.row,
+                name: s.name,
+                city: s.city,
+                cumulative: 0,
+                cumulativeRaw: 0,
+                max60: 0,
+                max60Raw: 0,
+                max60Time: '',
+                max24: 0,
+                max24Raw: 0,
+                max24Time: '',
+                maxRprime: 0,
+                maxRprimeTime: '',
+                maxRprimeLevel: 'normal'
+            };
+        });
+
+        // 逐次 R'値、60分雨量、24時間雨量、累加雨量の計算
+        uniqueTimestamps.forEach(tsKey => {
+            timeSeriesRprime[tsKey] = {};
+            stations.forEach(st => {
+                const p = timeSeries[tsKey]?.[st.name] ?? 0;
+                const state = runningR[st.name];
+
+                // 累加雨量
+                state.cumulative += p;
+
+                // 実効雨量計算 (半減期 1.5h & 72h)
+                state.r = (state.r * alpha) + p;
+                state.R = (state.R * beta) + p;
+
+                // R'土砂指標算定 (花崗岩・マサ土地域標準パラメータ R1=300, r1=60, 係数150)
+                const rNorm = state.r / 60;
+                const RNorm = state.R / 300;
+                const rprimeVal = Math.round(Math.sqrt(rNorm * rNorm + RNorm * RNorm) * 150 * 10) / 10;
+                timeSeriesRprime[tsKey][st.name] = rprimeVal;
+
+                // 履歴管理 (直近144スロット = 24時間分)
+                state.history10m.push(p);
+                if (state.history10m.length > 144) state.history10m.shift();
+
+                // 60分間雨量 (直近6スロットの合計)
+                const last6 = state.history10m.slice(-6);
+                const r60 = Math.round(last6.reduce((a, b) => a + b, 0) * 10) / 10;
+
+                // 24時間雨量 (直近144スロットの合計)
+                const r24 = Math.round(state.history10m.reduce((a, b) => a + b, 0) * 10) / 10;
+
+                // 統計サマリーの更新
+                const sum = stationStats[st.row];
+                if (sum) {
+                    sum.cumulative = Math.round(state.cumulative * 10) / 10;
+                    sum.cumulativeRaw = sum.cumulative;
+
+                    if (r60 >= sum.max60) {
+                        sum.max60 = r60;
+                        sum.max60Raw = r60;
+                        sum.max60Time = tsKey;
+                    }
+                    if (r24 >= sum.max24) {
+                        sum.max24 = r24;
+                        sum.max24Raw = r24;
+                        sum.max24Time = tsKey;
+                    }
+                    if (rprimeVal >= sum.maxRprime) {
+                        sum.maxRprime = rprimeVal;
+                        sum.maxRprimeTime = tsKey;
+                        sum.maxRprimeLevel = evaluateMetricLevel('rprime', rprimeVal);
+                    }
+                }
+            });
+        });
+
+        const startTs = uniqueTimestamps[0] || '';
+        const endTs = uniqueTimestamps[uniqueTimestamps.length - 1] || '';
+
+        const datasetResult = {
+            mapping: stations,
+            range: { start: startTs, end: endTs },
+            timeSeries: timeSeries,
+            timeSeriesRprime: timeSeriesRprime,
+            summary: stationStats
+        };
+
+        datasets.latest = datasetResult;
+        switchDataset('latest');
+
+        return {
+            success: true,
+            count: stations.length,
+            range: datasetResult.range,
+            slots: orderedTimestamps.length
+        };
     }
 
     /**
      * 外部で生成した rainfall_data.json の直接取り込み
      */
     function loadCustomJson(json) {
+        if (!json || !json.timeSeries) {
+            throw new Error('不正な rainfall_data.json 形式です。');
+        }
         datasets.latest = json;
         switchDataset('latest');
+        return {
+            success: true,
+            count: (json.mapping || stations).length,
+            range: json.range || { start: '', end: '' }
+        };
+    }
+
+    /**
+     * 指定された日付範囲 (startDate 〜 endDate) の定時表Excelを自動ダウンロードして解析
+     * (CORSプロキシ / ローカルAPI / ダイレクトフェッチの自動フォールバック対応)
+     */
+    async function fetchAndProcessDateRange(startDateStr, endDateStr, onProgress = null) {
+        if (!startDateStr || !endDateStr) {
+            throw new Error('開始日と終了日を指定してください。');
+        }
+
+        const start = new Date(startDateStr);
+        const end = new Date(endDateStr);
+        if (start > end) {
+            throw new Error('開始日は終了日以前の日付を指定してください。');
+        }
+
+        const dateList = [];
+        const cur = new Date(start);
+        while (cur <= end) {
+            const y = cur.getFullYear();
+            const m = String(cur.getMonth() + 1).padStart(2, '0');
+            const d = String(cur.getDate()).padStart(2, '0');
+            dateList.push({ y, m, d, ymd: `${y}${m}${d}` });
+            cur.setDate(cur.getDate() + 1);
+        }
+
+        const fileList = [];
+        const proxies = [
+            (url) => `/api/proxy?url=${encodeURIComponent(url)}`,
+            (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+            (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+            (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+            (url) => url // direct
+        ];
+
+        for (let i = 0; i < dateList.length; i++) {
+            const { y, m, ymd } = dateList[i];
+            const candidateUrls = [
+                `https://www.bousai.pref.hiroshima.lg.jp/data/observation/${y}/${m}/${ymd}-uryo.xlsx`,
+                `http://www.bousai.pref.hiroshima.jp/contents/regular/table/${ymd}-uryo.xlsx`
+            ];
+
+            if (onProgress) onProgress(ymd, i + 1, dateList.length);
+
+            let arrayBuffer = null;
+            let lastError = null;
+
+            for (const targetUrl of candidateUrls) {
+                if (arrayBuffer) break;
+                for (const proxyFn of proxies) {
+                    try {
+                        const reqUrl = proxyFn(targetUrl);
+                        const res = await fetch(reqUrl, { cache: 'no-cache' });
+                        if (res.ok) {
+                            const buf = await res.arrayBuffer();
+                            if (buf && buf.byteLength > 1000) { // 有効なExcelバイナリ (エラーHTMLでない)
+                                arrayBuffer = buf;
+                                break;
+                            }
+                        }
+                    } catch (e) {
+                        lastError = e;
+                    }
+                }
+            }
+
+            if (!arrayBuffer) {
+                throw new Error(`${ymd} の定時表Excelの自動取得に失敗しました。広島県サイト（https://www.bousai.pref.hiroshima.lg.jp/data/observation/${y}/${m}/${ymd}-uryo.xlsx）にデータが公開されているかご確認ください。`);
+            }
+
+            fileList.push({
+                arrayBuffer: arrayBuffer,
+                filename: `${ymd}-uryo.xlsx`
+            });
+        }
+
+        // ダウンロードした全ファイルをブラウザ内エンジンで解析・R'計算
+        return await loadCustomXlsx(fileList);
+    }
+
+    /**
+     * 広島県防災WEBから最新データを取得・解析（自動実行インターフェース）
+     */
+    async function updateFromHiroshimaBousaiWeb(startDate, endDate, onProgress = null) {
+        return await fetchAndProcessDateRange(startDate, endDate, onProgress);
     }
 
     /**
@@ -446,7 +745,9 @@ window.RainfallEngine = (function () {
         setMetric,
         setTimelineStep,
         updateFromHiroshimaBousaiWeb,
+        fetchAndProcessDateRange,
         loadCustomJson,
+        loadCustomXlsx,
         evaluateLocationRainfall,
         evaluateMetricLevel,
         getStationsLayer: () => stationsLayerGroup,

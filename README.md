@@ -3,7 +3,7 @@
 > **「地中の情報を、地上の安心に。」**  
 > Gio (Ground investigation open data) Vision
 
-広島県が提供するオープンデータプラットフォーム「DoboX」のボーリングデータを核として、**地震時の揺れやすさ・液状化リスク**、**広島県防災情報ポータル（広島防災WEB）実測雨量・R'値（実効雨量）による土砂災害リスク**、**水害ハザード**を直感的に評価・診断できる防災Webアプリケーションです。
+広島県が提供するオープンデータプラットフォーム「DoboX」のボーリングデータを核として、**地震時の揺れやすさ・液状化リスク**、**広島県防災情報ポータル（広島防災WEB）実測雨量・R'値（実効雨量）による土砂災害リスク**、**水害ハザード**を直感的に評価・診断できる統合防災Webアプリケーションです。
 
 ---
 
@@ -26,15 +26,17 @@ GioVision は、**「DoboX地盤データ × 広島防災WEB実測気象デー�
   5. **地層安定性**（岩盤深度・基盤強度）
 - **総合安全度ランク（S / A / B / C / D）** と具体的な防災・避難アクションの提言。
 
-### 2. 🌧 広島県防災情報ポータル（広島防災WEB）実観測データ連携
-- 広島県内408箇所の雨量観測局の定時表実測データ（`YYYYMMDD-uryo.xlsx`）を完全統合。
+### 2. 🌧 広島県防災WEB 実観測データ連携 & R'土砂指標自動解析
+- 広島県内408箇所の雨量観測局の定時表実測データ（`YYYYMMDD-uryo.xlsx`）を統合。
 - **広島・花崗岩地帯用 R'値計算エンジン** (`js/rainfall-engine.js`):
   - 短期半減期 $r_w=1.5\text{h}$、長期半減期 $R_w=72\text{h}$、楕円境界パラメータ（$R_1=300\text{mm}, r_1=60\text{mm}, A=3.0$）
   - $R' \ge 250$（極めて危険・避難指示相当）、$175 \sim 249$（警戒）、$125 \sim 174$（注意）、$<125$（平常）
+- **📅 カレンダー期間指定によるワンクリック自動取得・解析**:
+  - サイドバーで開始日・終了日を指定し、**「指定期間のデータを自動取得・解析」** をクリックするだけで、広島県サイトから定時表データを自動ダウンロード・ブラウザ内解析し、全408局の雨量・R'値マップとタイムラインを自動更新。
 - **実測時系列再生（10分間隔）**:
   - 定時表1〜4の10分毎実測データに基づき、時間経過に伴う実測雨量・R'値の推移を正確に再生。
-- **最新データ取得連携**:
-  - `hiroshima-rainfall` の更新機能（API / `process_data.js`）と連携し、指定期間の最新 xlsx を広島県サイトから直接ダウンロードして解析・反映。
+- **手動ファイル取込対応（予備）**:
+  - 複数日分の定時表Excel（`.xlsx`）や `rainfall_data.json` のドラッグ＆ドロップ取込にも対応。
 
 ### 3. 📐 2地点間・複数孔の地盤断面図ビューア
 - 地図上で複数のボーリング孔を選択するだけで、地層断面プロファイル（土質色分け、深度別N値バー、孔内水位線）を自動描画。
@@ -47,16 +49,34 @@ GioVision は、**「DoboX地盤データ × 広島防災WEB実測気象デー�
 
 ---
 
-## 🛠 技術スタック & データ連携
+## 🚀 起動方法
 
-- **Frontend**: HTML5, Vanilla JavaScript (ES6+), Tailwind CSS
-- **Maps**: Leaflet.js (WMS, WMTS, TileLayer)
-- **Data Integration**:
-  - `data/rainfall_data.json`: 広島防災WEB 実観測データ（`mapping`, `summary`, `timeSeries`, `timeSeriesRprime`）
-  - `data/rainfall_stations.json`: 広島県内全408雨量局マスタ（`mapping.json` 準拠）
+外部の別プロジェクト（`hiroshima-rainfall` 等）を別途起動する必要はありません。本リポジトリ単体ですぐに動作します。
+
+### 方法1: 静的ホスティング / VSCode Live Server（完全サーバーレス）
+- `index.html` をブラウザ（または VSCode Live Server、GitHub Pages 等）で開くだけで全機能が動作します。
+
+### 方法2: ローカル開発サーバー（推奨）
+本リポジトリ直下で以下を実行すると、内蔵プロキシ付きの軽量サーバーが起動します：
+```bash
+npm start
+# または
+node server.js
+```
+ブラウザで `http://localhost:5500` にアクセスしてください。
+
+---
+
+## 🛠 技術スタック & 構成
+
+- **Frontend**: HTML5, Vanilla JavaScript (ES6+), Tailwind CSS, Leaflet.js, SheetJS (`xlsx.full.min.js`)
+- **Data**:
+  - `data/rainfall_heisei30.json`: 平成30年7月豪雨 408観測局実測データ（時系列・R'値・累加雨量）
+  - `data/rainfall_latest.json` / `data/rainfall_data.json`: 最新・平常時実測データ
+  - `data/rainfall_stations.json`: 広島県内全408雨量局マスタ
   - `data.json`: 広島県 DoboX ボーリング調査データ
 - **Engines**:
-  - `js/rainfall-engine.js`: 広島防災WEB 実観測雨量・R'値解析モジュール
+  - `js/rainfall-engine.js`: 広島防災WEB 実観測雨量・R'値解析 & Excel/JSON自動計算モジュール
   - `js/seismic-engine.js`: AVS30・地盤増幅率・液状化簡易判定モジュール
   - `js/disaster-carte.js`: 総合防災カルテ・レーダーチャートモジュール
   - `js/section-viewer.js`: 地層断面図プロファイル生成モジュール

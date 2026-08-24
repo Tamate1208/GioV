@@ -206,6 +206,8 @@
         }
     </style>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- SheetJS for client-side Excel (YYYYMMDD-uryo.xlsx) parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="js/rainfall-engine.js"></script>
     <script src="js/seismic-engine.js"></script>
     <script src="js/disaster-carte.js"></script>
@@ -442,31 +444,56 @@
                         <div id="topStationsList" class="space-y-1 text-xs max-h-60 overflow-y-auto pr-1"></div>
                     </div>
 
-                    <!-- 広島防災WEB 最新データ更新フォーム -->
-                    <div class="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                        <div class="text-xs font-bold text-gray-800 flex items-center justify-between">
-                            <span>🔄 広島防災WEB 最新データ取得 (期間指定)</span>
+                    <!-- 広島防災WEB 実観測データ直接取込 (Excel / JSON) -->
+                    <div class="p-3 bg-gradient-to-br from-slate-50 to-blue-50/40 border border-blue-100 rounded-xl space-y-2.5 shadow-xs">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-bold text-gray-800 flex items-center gap-1.5">
+                                <span>🌧 観測雨量・R'データの更新</span>
+                            </span>
+                            <span class="text-[9px] bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded font-semibold">アプリ内完結</span>
                         </div>
-                        <div class="grid grid-cols-2 gap-2 text-xs">
-                            <div>
-                                <label class="text-[10px] text-gray-500 block mb-0.5">開始日</label>
-                                <input type="date" id="apiStartDate" class="w-full text-xs p-1 border border-gray-300 rounded bg-white" />
-                            </div>
-                            <div>
-                                <label class="text-[10px] text-gray-500 block mb-0.5">終了日</label>
-                                <input type="date" id="apiEndDate" class="w-full text-xs p-1 border border-gray-300 rounded bg-white" />
-                            </div>
-                        </div>
-                        <button onclick="requestBousaiWebUpdate()" class="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-1.5 rounded-lg shadow-xs transition flex items-center justify-center gap-1">
-                            広島県サイトから最新xlsxを取得・解析
-                        </button>
-                    </div>
 
-                    <!-- rainfall_data.json 取込 -->
-                    <div class="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
-                        <div class="text-xs font-bold text-gray-700 mb-0.5">rainfall_data.json 直接読込</div>
-                        <p class="text-[10px] text-gray-500 mb-1.5">hiroshima-rainfall で生成したJSONファイルを指定</p>
-                        <input type="file" id="rainJsonInput" accept=".json" class="text-xs text-slate-500 file:mr-2 file:py-1 file:px-2.5 file:rounded-md file:border-0 file:text-[10px] file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer" />
+                        <!-- カレンダーによる期間指定 & 自動実行ボタン -->
+                        <div class="bg-white p-2.5 rounded-lg border border-slate-200 space-y-2">
+                            <div class="text-[11px] font-bold text-gray-700 flex justify-between items-center">
+                                <span>📅 観測期間の指定</span>
+                                <span class="text-[9px] text-gray-400 font-normal">広島防災WEB定時表</span>
+                            </div>
+                            <div class="grid grid-cols-2 gap-2 text-xs">
+                                <div>
+                                    <label class="text-[10px] text-gray-500 block mb-0.5">開始日</label>
+                                    <input type="date" id="apiStartDate" class="w-full text-xs p-1 border border-gray-300 rounded bg-slate-50 focus:bg-white" onchange="generateBousaiDownloadLinks()" />
+                                </div>
+                                <div>
+                                    <label class="text-[10px] text-gray-500 block mb-0.5">終了日</label>
+                                    <input type="date" id="apiEndDate" class="w-full text-xs p-1 border border-gray-300 rounded bg-slate-50 focus:bg-white" onchange="generateBousaiDownloadLinks()" />
+                                </div>
+                            </div>
+                            
+                            <!-- 自動取得・解析ボタン -->
+                            <button id="btnAutoFetch" onclick="requestAutomaticBousaiUpdate()"
+                                    class="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold py-2 rounded-lg shadow-sm transition flex items-center justify-center gap-1.5 cursor-pointer">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                </svg>
+                                <span>指定期間のデータを自動取得・解析</span>
+                            </button>
+
+                            <div id="bousaiDownloadLinksArea" class="hidden space-y-1 border-t border-slate-100 pt-1.5">
+                                <div class="text-[10px] text-gray-500 flex justify-between">
+                                    <span>定時表Excelダウンロード:</span>
+                                    <a href="https://www.bousai.pref.hiroshima.lg.jp/" target="_blank" rel="noopener noreferrer" class="text-[9px] text-blue-600 hover:underline">広島防災WEB</a>
+                                </div>
+                                <div id="bousaiLinksList" class="flex flex-wrap gap-1"></div>
+                            </div>
+                        </div>
+
+                        <!-- ドロップゾーン & ファイル選択 (手動取込用) -->
+                        <div id="rainDropZone" onclick="document.getElementById('rainFileInput').click()" class="border border-dashed border-slate-300 hover:border-blue-400 hover:bg-blue-50/30 bg-white/70 p-2 rounded-lg text-center cursor-pointer transition flex flex-col items-center justify-center gap-0.5">
+                            <span class="text-[10px] font-bold text-gray-600">手動取込: Excel (.xlsx 複数可) / JSON を選択またはドロップ</span>
+                            <input type="file" id="rainFileInput" accept=".xlsx,.xls,.json" multiple class="hidden" onchange="handleRainFileInputChange(event)" />
+                        </div>
+                        <div id="rainFileStatus" class="text-[10px] text-gray-600 hidden bg-white p-2 rounded border border-gray-200"></div>
                     </div>
                 </div>
 
@@ -695,13 +722,11 @@
                     layers.rainfall.addTo(map);
                 }
 
-                // 4. カスタムJSON読込イベント設定
-                document.getElementById('rainJsonInput').addEventListener('change', handleRainJsonUpload);
-
-                // 5. 日付フォームをアクセス当日・前日に自動初期化
+                // 4. 雨量データ取込ドロップゾーン & カレンダー初期化
+                setupRainDropZone();
                 initDateInputs();
 
-                // 6. タイムラインスライダーを初期ステップ（最新時刻）に同期
+                // 5. タイムラインスライダーを初期ステップ（最新時刻）に同期
                 const curStep = window.RainfallEngine.getCurrentTimestampIndex();
                 document.getElementById('timelineSlider').value = curStep;
                 updateTimelineLabel(curStep);
@@ -713,26 +738,6 @@
                 loading.classList.add("hidden");
             }
         });
-
-        function initDateInputs() {
-            const today = new Date();
-            const yesterday = new Date(today);
-            yesterday.setDate(yesterday.getDate() - 1);
-
-            const formatDate = (d) => {
-                const y = d.getFullYear();
-                const m = String(d.getMonth() + 1).padStart(2, '0');
-                const day = String(d.getDate()).padStart(2, '0');
-                return `${y}-${m}-${day}`;
-            };
-
-            const startEl = document.getElementById('apiStartDate');
-            const endEl = document.getElementById('apiEndDate');
-            if (startEl && endEl) {
-                startEl.value = formatDate(yesterday);
-                endEl.value = formatDate(today);
-            }
-        }
 
         function initMap() {
             map = L.map("map", {
@@ -1250,43 +1255,220 @@
             document.getElementById('topStationsList').innerHTML = topHtml;
         }
 
-        // 広島防災WEB最新取得リクエスト
-        async function requestBousaiWebUpdate() {
-            const start = document.getElementById('apiStartDate').value;
-            const end = document.getElementById('apiEndDate').value;
-            if (!start || !end) {
+        // --- 観測期間（開始日・終了日）初期化 & ダウンロードリンク生成 ---
+        function initDateInputs() {
+            const today = new Date();
+            const yesterday = new Date(today);
+            yesterday.setDate(yesterday.getDate() - 1);
+
+            const formatDate = (d) => {
+                const y = d.getFullYear();
+                const m = String(d.getMonth() + 1).padStart(2, '0');
+                const day = String(d.getDate()).padStart(2, '0');
+                return `${y}-${m}-${day}`;
+            };
+
+            const startEl = document.getElementById('apiStartDate');
+            const endEl = document.getElementById('apiEndDate');
+            if (startEl && endEl) {
+                startEl.value = formatDate(yesterday);
+                endEl.value = formatDate(today);
+                generateBousaiDownloadLinks();
+            }
+        }
+
+        function generateBousaiDownloadLinks() {
+            const startVal = document.getElementById('apiStartDate')?.value;
+            const endVal = document.getElementById('apiEndDate')?.value;
+            const area = document.getElementById('bousaiDownloadLinksArea');
+            const list = document.getElementById('bousaiLinksList');
+            if (!startVal || !endVal || !area || !list) return;
+
+            const startDate = new Date(startVal);
+            const endDate = new Date(endVal);
+            if (startDate > endDate) {
+                area.classList.add('hidden');
+                return;
+            }
+
+            const links = [];
+            const cur = new Date(startDate);
+            while (cur <= endDate) {
+                const y = cur.getFullYear();
+                const m = String(cur.getMonth() + 1).padStart(2, '0');
+                const d = String(cur.getDate()).padStart(2, '0');
+                const ymd = `${y}${m}${d}`;
+                const label = `${m}/${d}`;
+                const url = `https://www.bousai.pref.hiroshima.lg.jp/data/observation/${y}/${m}/${ymd}-uryo.xlsx`;
+                links.push(`
+                    <a href="${url}" target="_blank" rel="noopener noreferrer" download="${ymd}-uryo.xlsx"
+                       class="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-800 hover:bg-blue-600 hover:text-white transition font-bold"
+                       title="${ymd}-uryo.xlsx をダウンロード">
+                        <span>📥</span> <span>${label} 定時表</span>
+                    </a>
+                `);
+                cur.setDate(cur.getDate() + 1);
+            }
+
+            if (links.length > 0) {
+                list.innerHTML = links.join('');
+                area.classList.remove('hidden');
+            } else {
+                area.classList.add('hidden');
+            }
+        }
+
+        // --- 広島防災WEBから指定期間のデータを自動取得・解析 ---
+        async function requestAutomaticBousaiUpdate() {
+            const startVal = document.getElementById('apiStartDate')?.value;
+            const endVal = document.getElementById('apiEndDate')?.value;
+            if (!startVal || !endVal) {
                 alert('開始日と終了日を選択してください。');
                 return;
             }
+
+            const btn = document.getElementById('btnAutoFetch');
+            const statusEl = document.getElementById('rainFileStatus');
+            const loading = document.getElementById('loading');
+            
+            loading.classList.remove('hidden');
+            statusEl.classList.remove('hidden');
+            if (btn) btn.disabled = true;
+
+            const onProgress = (ymd, current, total) => {
+                const text = `⏳ 広島県サイトから取得・解析中 (${current}/${total}日目: ${ymd})...`;
+                statusEl.innerHTML = `<span class="text-blue-600 font-bold animate-pulse">${text}</span>`;
+            };
+
+            try {
+                const res = await window.RainfallEngine.fetchAndProcessDateRange(startVal, endVal, onProgress);
+                onDatasetModeChange('latest');
+                const rangeStr = res.range.start && res.range.end ? `${res.range.start} 〜 ${res.range.end}` : '';
+                statusEl.innerHTML = `
+                    <div class="text-emerald-700 font-bold flex items-center gap-1">
+                        <span>✓ 自動取得・解析完了:</span>
+                    </div>
+                    <div class="text-[9px] text-blue-700 font-bold mt-0.5">
+                        全${res.count}観測局 | ${rangeStr} (${res.slots}タイムスロット計算済)
+                    </div>
+                `;
+            } catch (err) {
+                console.warn('Auto fetch failed:', err);
+                statusEl.innerHTML = `
+                    <div class="text-amber-700 font-bold text-[10px]">
+                        ⚠️ 自動通信エラー: ${err.message || 'データ取得に失敗しました'}
+                    </div>
+                    <div class="text-[9px] text-gray-500 mt-1">
+                        ※上の「定時表Excelダウンロード」リンクから保存し、下部エリアにドロップして解析することも可能です。
+                    </div>
+                `;
+                alert(`自動取得に失敗しました。\n${err.message}\n\n※カレンダー下の「定時表Excelダウンロード」リンクからファイルを保存し、下部のドロップ枠にドラッグ＆ドロップして手動解析することも可能です。`);
+            } finally {
+                loading.classList.add('hidden');
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        // --- 広島防災WEB 実観測ファイル (Excel / JSON / 複数ファイル一括) のブラウザ直接解析 ---
+        async function processRainfallFiles(files) {
+            if (!files || files.length === 0) return;
+            const statusEl = document.getElementById('rainFileStatus');
             const loading = document.getElementById('loading');
             loading.classList.remove('hidden');
+
+            statusEl.classList.remove('hidden');
+            statusEl.innerHTML = `<span class="text-blue-600 font-bold animate-pulse">⏳ ${files.length}件のファイルをブラウザ内で解析・計算中...</span>`;
+
             try {
-                const res = await window.RainfallEngine.updateFromHiroshimaBousaiWeb(start, end);
+                // 1. JSONファイルが含まれている場合
+                const jsonFile = Array.from(files).find(f => f.name.toLowerCase().endsWith('.json'));
+                if (jsonFile) {
+                    const text = await jsonFile.text();
+                    const json = JSON.parse(text);
+                    const res = window.RainfallEngine.loadCustomJson(json);
+                    onDatasetModeChange('latest');
+                    const rangeStr = res.range.start && res.range.end ? `${res.range.start} 〜 ${res.range.end}` : '';
+                    statusEl.innerHTML = `
+                        <div class="text-emerald-700 font-bold flex items-center gap-1">
+                            <span>✓ 解析完了 (JSON):</span>
+                            <span class="truncate max-w-[200px]">${jsonFile.name}</span>
+                        </div>
+                        <div class="text-[9px] text-gray-500 mt-0.5">
+                            全${res.count}観測局 | ${rangeStr} (R'値・累加雨量を反映)
+                        </div>
+                    `;
+                    return;
+                }
+
+                // 2. Excelファイル群の処理
+                const excelFiles = Array.from(files).filter(f => {
+                    const ext = f.name.split('.').pop().toLowerCase();
+                    return ext === 'xlsx' || ext === 'xls';
+                });
+
+                if (excelFiles.length === 0) {
+                    throw new Error('対応形式は .xlsx / .xls または .json です。');
+                }
+
+                const parsedList = [];
+                for (const f of excelFiles) {
+                    const arrayBuffer = await f.arrayBuffer();
+                    parsedList.push({ arrayBuffer, filename: f.name });
+                }
+
+                const res = await window.RainfallEngine.loadCustomXlsx(parsedList);
                 onDatasetModeChange('latest');
-                alert(`広島県防災情報ポータルから最新データを取得しました (${res.count}局)`);
+                const rangeStr = res.range.start && res.range.end ? `${res.range.start} 〜 ${res.range.end}` : '';
+                statusEl.innerHTML = `
+                    <div class="text-emerald-700 font-bold flex items-center gap-1">
+                        <span>✓ 解析完了 (Excel ${excelFiles.length}ファイル):</span>
+                    </div>
+                    <div class="text-[9px] text-gray-600 truncate mt-0.5">
+                        ${excelFiles.map(f => f.name).join(', ')}
+                    </div>
+                    <div class="text-[9px] text-blue-700 font-bold mt-0.5">
+                        全${res.count}観測局 | ${rangeStr} (${res.slots}タイムスロット計算済)
+                    </div>
+                `;
             } catch (err) {
-                alert('最新データの取得に失敗しました。\nhiroshima-rainfall の server (http://localhost:5500) が起動しているか確認してください。\nまたは下部より rainfall_data.json を直接読み込んでください。');
+                console.error('File parsing error:', err);
+                statusEl.innerHTML = `<span class="text-red-600 font-bold">❌ 解析エラー: ${err.message || 'ファイルの読み込みに失敗しました'}</span>`;
+                alert(`ファイルの解析に失敗しました: ${err.message}`);
             } finally {
                 loading.classList.add('hidden');
             }
         }
 
-        // カスタムJSONアップロード
-        function handleRainJsonUpload(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                try {
-                    const json = JSON.parse(e.target.result);
-                    window.RainfallEngine.loadCustomJson(json);
-                    onDatasetModeChange('latest');
-                    alert(`広島防災WEB実観測データを読み込みました: ${file.name}`);
-                } catch (err) {
-                    alert('JSONファイルの解析に失敗しました。');
-                }
-            };
-            reader.readAsText(file);
+        function handleRainFileInputChange(event) {
+            const files = event.target.files;
+            if (files && files.length > 0) processRainfallFiles(files);
+        }
+
+        function setupRainDropZone() {
+            const dropZone = document.getElementById('rainDropZone');
+            if (!dropZone) return;
+
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropZone.addEventListener(eventName, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dropZone.classList.add('border-blue-500', 'bg-blue-100/50');
+                }, false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dropZone.classList.remove('border-blue-500', 'bg-blue-100/50');
+                }, false);
+            });
+
+            dropZone.addEventListener('drop', (e) => {
+                const dt = e.dataTransfer;
+                const files = dt.files;
+                if (files && files.length > 0) processRainfallFiles(files);
+            }, false);
         }
 
         // --- タイムライン再生制御 ---
