@@ -42,32 +42,55 @@ const server = http.createServer((req, res) => {
             return;
         }
 
-        const fetchUrl = (reqUrl) => {
+        const fetchUrl = (reqUrl, redirectCount = 0) => {
+            if (redirectCount > 5) {
+                res.writeHead(502, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Too many redirects' }));
+                return;
+            }
+
             const client = reqUrl.startsWith('https:') ? require('https') : require('http');
+            const parsedTarget = new url.URL(reqUrl);
             const options = {
+                hostname: parsedTarget.hostname,
+                port: parsedTarget.port || (reqUrl.startsWith('https:') ? 443 : 80),
+                path: parsedTarget.pathname + parsedTarget.search,
+                method: 'GET',
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': '*/*'
+                    'Accept': '*/*',
+                    'Accept-Encoding': 'identity'
                 }
             };
-            client.get(reqUrl, options, (proxyRes) => {
+
+            const proxyReq = client.request(options, (proxyRes) => {
                 if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400 && proxyRes.headers.location) {
                     let redirectUrl = proxyRes.headers.location;
                     if (redirectUrl.startsWith('/')) {
-                        const parsedOrig = url.parse(reqUrl);
-                        redirectUrl = `${parsedOrig.protocol}//${parsedOrig.host}${redirectUrl}`;
+                        redirectUrl = `${parsedTarget.protocol}//${parsedTarget.host}${redirectUrl}`;
                     }
-                    return fetchUrl(redirectUrl);
+                    return fetchUrl(redirectUrl, redirectCount + 1);
                 }
-                res.writeHead(proxyRes.statusCode, {
-                    'Content-Type': proxyRes.headers['content-type'] || 'application/octet-stream',
-                    'Access-Control-Allow-Origin': '*'
-                });
+
+                const responseHeaders = {
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+                    'Content-Type': proxyRes.headers['content-type'] || 'application/octet-stream'
+                };
+                if (proxyRes.headers['content-length']) {
+                    responseHeaders['Content-Length'] = proxyRes.headers['content-length'];
+                }
+
+                res.writeHead(proxyRes.statusCode, responseHeaders);
                 proxyRes.pipe(res);
-            }).on('error', (err) => {
-                res.writeHead(502, { 'Content-Type': 'application/json' });
+            });
+
+            proxyReq.on('error', (err) => {
+                res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
                 res.end(JSON.stringify({ error: err.message }));
             });
+
+            proxyReq.end();
         };
 
         fetchUrl(targetUrl);

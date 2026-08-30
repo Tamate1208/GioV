@@ -468,15 +468,14 @@ window.RainfallEngine = (function () {
         }
 
         const fileList = [];
-        // GitHub Pages (静的ホスティング) では server.js が動かないため /api/proxy は使用不可
-        const isGithubPages = window.location.hostname.endsWith('github.io');
+        // 最優先: 自前サーバー/APIプロキシ (/api/proxy)
+        // フォールバック: パブリックCORSプロキシ / ダイレクト
         const proxies = [
-            // ローカルサーバー環境のみ: /api/proxy を使用
-            ...(!isGithubPages ? [(url) => `/api/proxy?url=${encodeURIComponent(url)}`] : []),
+            (url) => `/api/proxy?url=${encodeURIComponent(url)}`,
             (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
             (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
             (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-            (url) => url // direct (CORS制限がない場合のフォールバック)
+            (url) => url // direct (CORS制限がない環境用)
         ];
 
         for (let i = 0; i < dateList.length; i++) {
@@ -511,7 +510,7 @@ window.RainfallEngine = (function () {
             }
 
             if (!arrayBuffer) {
-                throw new Error(`${ymd} の定時表Excelの自動取得に失敗しました。広島県サイト（https://www.bousai.pref.hiroshima.lg.jp/data/observation/${y}/${m}/${ymd}-uryo.xlsx）にデータが公開されているかご確認ください。`);
+                throw new Error(`${ymd} の定時表Excelの自動取得に失敗しました。サーバープロキシ（server.js）が稼働しているか、または手動でExcelファイルをドラッグ＆ドロップしてください。`);
             }
 
             fileList.push({
