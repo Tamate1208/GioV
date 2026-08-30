@@ -123,9 +123,10 @@ const server = http.createServer((req, res) => {
     });
 });
 
-server.listen(PORT, () => {
+const HOST = '0.0.0.0';
+server.listen(PORT, HOST, () => {
     console.log(`=========================================`);
     console.log(` GioVision Hiroshima App Server running`);
-    console.log(` URL: http://localhost:${PORT}`);
+    console.log(` Host: ${HOST}, Port: ${PORT}`);
     console.log(`=========================================`);
 });
