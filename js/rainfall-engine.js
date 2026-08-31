@@ -215,197 +215,171 @@ window.RainfallEngine = (function () {
             ? input
             : [{ arrayBuffer: input, filename: defaultFilename }];
 
-        // シート巡回と10分刻み時系列データの抽出
-        const timeSeries = {};      // 'YYYYMMDD HH:MM' -> { [stationName]: 10minRain }
-        const orderedTimestamps = [];
+        // 各局・全期間の10分生データ集約用の構造
+        const allValues = {};     // stationRow -> Array of 10min values (or null)
+        const allTimestamps = []; // YYYYMMDD HH:MM の全タイムスタンプ
+
+        // パラメータ定数 (hiroshima-rainfall 共通)
+        const RP_N    = 72;    // Rw 半減期 (時間)
+        const RP_M    = 1.5;   // rw 半減期 (時間)
+        const RP_R1   = 300;   // 楕円中心 Rw (mm)
+        const RP_r1   = 60;    // 楕円中心 rw (mm)
+        const RP_A    = 3.0;   // 重み係数
+        const ALPHA_RW  = Math.pow(0.5, 1 / (6 * RP_N));
+        const ALPHA_rw  = Math.pow(0.5, 1 / (6 * RP_M));
+        const RP_Rfw0 = Math.sqrt(RP_R1 ** 2 + (RP_A * RP_r1) ** 2);
+
+        stations.forEach(s => {
+            allValues[s.row] = [];
+        });
 
         fileList.forEach(fileItem => {
             const ab = fileItem.arrayBuffer;
             const fn = fileItem.filename || '';
             const wb = XLSX.read(ab, { type: 'array' });
-            const sheetNames = wb.SheetNames;
 
-            // 日付の推定 (ファイル名またはシート内のテキストから抽出)
-            let baseDateStr = '';
+            let dateStr = '';
             const fnMatch = fn.match(/(\d{4})[-_]?(\d{2})[-_]?(\d{2})/);
             if (fnMatch) {
-                baseDateStr = `${fnMatch[1]}${fnMatch[2]}${fnMatch[3]}`;
+                dateStr = `${fnMatch[1]}${fnMatch[2]}${fnMatch[3]}`;
+            } else {
+                const now = new Date();
+                dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
             }
 
-            sheetNames.forEach((sName, sheetIdx) => {
-                const ws = wb.Sheets[sName];
-                if (!ws) return;
-                const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
-                if (!data || data.length < 4) return;
+            const sheetNames = ['雨量定時表1', '雨量定時表2', '雨量定時表3', '雨量定時表4'];
+            const dayData = {};
+            stations.forEach(s => dayData[s.row] = new Array(144).fill(null));
 
-                // 日付の抽出 (シート内文字列から)
-                let sheetDateStr = baseDateStr;
-                if (!sheetDateStr) {
-                    for (let r = 0; r < Math.min(4, data.length); r++) {
-                        const rowText = (data[r] || []).join(' ');
-                        const m = rowText.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/) || rowText.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-                        if (m) {
-                            const y = m[1];
-                            const mo = m[2].padStart(2, '0');
-                            const d = m[3].padStart(2, '0');
-                            sheetDateStr = `${y}${mo}${d}`;
-                            break;
-                        }
+            sheetNames.forEach((sheetName, sidx) => {
+                const sheet = wb.Sheets[sheetName];
+                if (!sheet) return;
+
+                stations.forEach(st => {
+                    const r = st.row;
+                    for (let c = 2; c <= 37; c++) {
+                        const cellAddress = XLSX.utils.encode_cell({ r: r - 1, c: c });
+                        const cell = sheet[cellAddress];
+                        const val = (cell && cell.v !== undefined && cell.v !== null && !isNaN(parseFloat(cell.v)))
+                            ? parseFloat(cell.v)
+                            : null;
+                        const slotIndex = (sidx * 36) + (c - 2);
+                        if (slotIndex < 144) dayData[r][slotIndex] = val;
                     }
-                }
-                if (!sheetDateStr) {
-                    const now = new Date();
-                    sheetDateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
-                }
-
-                // 時間列の検出 (00:10 〜 24:00 等)
-                let timeCols = []; // [{ colIdx, timeStr: 'HH:MM' }]
-
-                for (let r = 0; r < Math.min(5, data.length); r++) {
-                    const rowArr = data[r] || [];
-                    const foundCols = [];
-                    for (let c = 0; c < rowArr.length; c++) {
-                        const val = String(rowArr[c] || '').trim();
-                        const tm = val.match(/^(\d{1,2}):(\d{2})$/);
-                        if (tm) {
-                            const hh = tm[1].padStart(2, '0');
-                            const mm = tm[2];
-                            foundCols.push({ colIdx: c, timeStr: `${hh}:${mm}` });
-                        }
-                    }
-                    if (foundCols.length >= 6) {
-                        timeCols = foundCols;
-                        break;
-                    }
-                }
-
-                // 時間ヘッダーが見つからなかった場合のフォールバック（定時表1〜4の既定36列）
-                if (timeCols.length === 0) {
-                    const startHour = sheetIdx * 6;
-                    const startCol = 3; // 通常4列目から雨量
-                    for (let slot = 0; slot < 36; slot++) {
-                        const totalMin = (slot + 1) * 10;
-                        const h = Math.floor(totalMin / 60) + startHour;
-                        const m = totalMin % 60;
-                        const hh = String(h).padStart(2, '0');
-                        const mm = String(m).padStart(2, '0');
-                        timeCols.push({ colIdx: startCol + slot, timeStr: `${hh}:${mm}` });
-                    }
-                }
-
-                // 各時間スロットを時系列に登録
-                timeCols.forEach(tc => {
-                    const tsKey = `${sheetDateStr} ${tc.timeStr}`;
-                    if (!timeSeries[tsKey]) {
-                        timeSeries[tsKey] = {};
-                        orderedTimestamps.push(tsKey);
-                    }
-
-                    // 各観測局の雨量値抽出
-                    stations.forEach(st => {
-                        const rIdx = st.row - 1; // 0-indexed
-                        let rainVal = 0;
-                        if (data[rIdx] && data[rIdx][tc.colIdx] !== undefined && data[rIdx][tc.colIdx] !== null) {
-                            const raw = data[rIdx][tc.colIdx];
-                            const num = parseFloat(String(raw).replace(/[^0-9.-]/g, ''));
-                            if (!isNaN(num) && num >= 0) rainVal = num;
-                        }
-                        timeSeries[tsKey][st.name] = rainVal;
-                    });
                 });
             });
-        });
 
-        // タイムスタンプ順にソート（重複排除）
-        const uniqueTimestamps = Array.from(new Set(orderedTimestamps)).sort();
+            // 1日 144 スロットのタイムスタンプ生成
+            for (let i = 0; i < 144; i++) {
+                const totalMin = (i + 1) * 10;
+                const h = Math.floor(totalMin / 60);
+                const m = totalMin % 60;
+                let ts = '';
+                if (h === 24 && m === 0) {
+                    ts = `${dateStr} 23:59`;
+                } else {
+                    const hh = String(h).padStart(2, '0');
+                    const mm = String(m).padStart(2, '0');
+                    ts = `${dateStr} ${hh}:${mm}`;
+                }
+                allTimestamps.push(ts);
+            }
 
-        // 半減期パラメータ (短期: 1.5h = 90min, 長期: 72h = 4320min)
-        const alpha = Math.pow(0.5, 10 / 90);      // 約 0.92587
-        const beta = Math.pow(0.5, 10 / 4320);     // 約 0.998396
-
-        // 局ごとの逐次実効雨量保持用
-        const runningR = {};
-        const timeSeriesRprime = {};
-        const stationStats = {};
-
-        stations.forEach(s => {
-            runningR[s.name] = { r: 0, R: 0, history10m: [], cumulative: 0 };
-            stationStats[s.row] = {
-                row: s.row,
-                name: s.name,
-                city: s.city,
-                cumulative: 0,
-                cumulativeRaw: 0,
-                max60: 0,
-                max60Raw: 0,
-                max60Time: '',
-                max24: 0,
-                max24Raw: 0,
-                max24Time: '',
-                maxRprime: 0,
-                maxRprimeTime: '',
-                maxRprimeLevel: 'normal'
-            };
-        });
-
-        // 逐次 R'値、60分雨量、24時間雨量、累加雨量の計算
-        uniqueTimestamps.forEach(tsKey => {
-            timeSeriesRprime[tsKey] = {};
             stations.forEach(st => {
-                const p = timeSeries[tsKey]?.[st.name] ?? 0;
-                const state = runningR[st.name];
-
-                // 累加雨量
-                state.cumulative += p;
-
-                // 実効雨量計算 (半減期 1.5h & 72h)
-                state.r = (state.r * alpha) + p;
-                state.R = (state.R * beta) + p;
-
-                // R'土砂指標算定 (花崗岩・マサ土地域標準パラメータ R1=300, r1=60, 係数150)
-                const rNorm = state.r / 60;
-                const RNorm = state.R / 300;
-                const rprimeVal = Math.round(Math.sqrt(rNorm * rNorm + RNorm * RNorm) * 150 * 10) / 10;
-                timeSeriesRprime[tsKey][st.name] = rprimeVal;
-
-                // 履歴管理 (直近144スロット = 24時間分)
-                state.history10m.push(p);
-                if (state.history10m.length > 144) state.history10m.shift();
-
-                // 60分間雨量 (直近6スロットの合計)
-                const last6 = state.history10m.slice(-6);
-                const r60 = Math.round(last6.reduce((a, b) => a + b, 0) * 10) / 10;
-
-                // 24時間雨量 (直近144スロットの合計)
-                const r24 = Math.round(state.history10m.reduce((a, b) => a + b, 0) * 10) / 10;
-
-                // 統計サマリーの更新
-                const sum = stationStats[st.row];
-                if (sum) {
-                    sum.cumulative = Math.round(state.cumulative * 10) / 10;
-                    sum.cumulativeRaw = sum.cumulative;
-
-                    if (r60 >= sum.max60) {
-                        sum.max60 = r60;
-                        sum.max60Raw = r60;
-                        sum.max60Time = tsKey;
-                    }
-                    if (r24 >= sum.max24) {
-                        sum.max24 = r24;
-                        sum.max24Raw = r24;
-                        sum.max24Time = tsKey;
-                    }
-                    if (rprimeVal >= sum.maxRprime) {
-                        sum.maxRprime = rprimeVal;
-                        sum.maxRprimeTime = tsKey;
-                        sum.maxRprimeLevel = evaluateMetricLevel('rprime', rprimeVal);
-                    }
+                const row = st.row;
+                if (dayData[row]) {
+                    allValues[row].push(...dayData[row]);
                 }
             });
         });
 
-        const startTs = uniqueTimestamps[0] || '';
-        const endTs = uniqueTimestamps[uniqueTimestamps.length - 1] || '';
+        // 60分雨量 (timeSeries) および R'指標 (timeSeriesRprime) の計算
+        const timeSeries = {};
+        const timeSeriesRprime = {};
+        const stationMaxes = {};
+
+        stations.forEach(st => {
+            const row = st.row;
+            const values = allValues[row] || [];
+
+            stationMaxes[row] = {
+                row: row,
+                name: st.name,
+                city: st.city,
+                max60: null, max60Raw: null, max24: null, max24Raw: null,
+                max60Time: '', max60RawTime: '', max24Time: '', max24RawTime: '',
+                cumulative: null, cumulativeRaw: null,
+                maxRprime: null, maxRprimeTime: '', maxRprimeLevel: 'normal'
+            };
+
+            let Rw_state = 0;
+            let rw_state = 0;
+
+            for (let i = 0; i < values.length; i++) {
+                const ts = allTimestamps[i] || '';
+                const p10 = values[i] ?? 0; // 欠測は減衰のみ継続
+
+                // --- 実効雨量 Rw・rw を更新 ---
+                Rw_state = ALPHA_RW * Rw_state + p10;
+                rw_state = ALPHA_rw * rw_state + p10;
+
+                // --- R' を計算 ---
+                const Rfw = Math.sqrt(Math.pow(RP_R1 - Rw_state, 2) + Math.pow(RP_A * (RP_r1 - rw_state), 2));
+                const rprime = Math.max(0, Math.round((RP_Rfw0 - Rfw) * 10) / 10);
+
+                if (!timeSeriesRprime[ts]) timeSeriesRprime[ts] = {};
+                timeSeriesRprime[ts][st.name] = rprime;
+
+                if (stationMaxes[row].maxRprime === null || rprime > stationMaxes[row].maxRprime) {
+                    stationMaxes[row].maxRprime = rprime;
+                    stationMaxes[row].maxRprimeTime = ts;
+                    if      (rprime >= 250) stationMaxes[row].maxRprimeLevel = 'danger';
+                    else if (rprime >= 175) stationMaxes[row].maxRprimeLevel = 'caution';
+                    else if (rprime >= 125) stationMaxes[row].maxRprimeLevel = 'watch';
+                    else                    stationMaxes[row].maxRprimeLevel = 'normal';
+                }
+
+                // --- 60分ローリング (JMA基準: 60分間/6スロット揃っている場合は合計) ---
+                const win60Full = values.slice(Math.max(0, i - 5), i + 1);
+                const win60Valid = win60Full.filter(v => v !== null);
+
+                if (win60Full.length === 6 && win60Valid.length === 6) {
+                    const sum60 = Math.round(win60Valid.reduce((a, b) => a + b, 0) * 10) / 10;
+                    if (!timeSeries[ts]) timeSeries[ts] = {};
+                    timeSeries[ts][st.name] = sum60;
+
+                    if (stationMaxes[row].max60 === null || sum60 > stationMaxes[row].max60) {
+                        stationMaxes[row].max60 = sum60;
+                        stationMaxes[row].max60Time = ts;
+                    }
+                } else {
+                    if (!timeSeries[ts]) timeSeries[ts] = {};
+                    timeSeries[ts][st.name] = null;
+                }
+
+                // --- 24時間ローリング ---
+                const win24Full = values.slice(Math.max(0, i - 143), i + 1);
+                const win24Valid = win24Full.filter(v => v !== null);
+                if (win24Valid.length > 0) {
+                    const rawSum = win24Valid.reduce((a, b) => a + b, 0);
+                    const estimatedSum = Math.round((rawSum * (144 / win24Valid.length)) * 10) / 10;
+                    if (stationMaxes[row].max24 === null || estimatedSum > stationMaxes[row].max24) {
+                        stationMaxes[row].max24 = estimatedSum;
+                        stationMaxes[row].max24Time = ts;
+                    }
+                }
+            }
+
+            const allValid = values.filter(v => v !== null);
+            if (allValid.length > 0) {
+                const rawSum = allValid.reduce((a, b) => a + b, 0);
+                stationMaxes[row].cumulativeRaw = Math.round(rawSum * 10) / 10;
+                stationMaxes[row].cumulative = Math.round((rawSum * (values.length / allValid.length)) * 10) / 10;
+            }
+        });
+
+        const startTs = allTimestamps[0] || '';
+        const endTs = allTimestamps[allTimestamps.length - 1] || '';
 
         const datasetResult = {
             mapping: stations,
