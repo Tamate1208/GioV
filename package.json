@@ -14,5 +14,8 @@
     "disaster-prevention"
   ],
   "author": "tamate1208",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.23.4"
+  }
 }
