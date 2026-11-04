@@ -206,6 +206,8 @@
         }
     </style>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Chart.js for Rainfall & R' Sediment Disaster Time Series -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- SheetJS for client-side Excel (YYYYMMDD-uryo.xlsx) parsing -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="js/rainfall-engine.js"></script>
@@ -699,6 +701,13 @@
 
         // --- アプリケーション初期化 ---
         document.addEventListener("DOMContentLoaded", async () => {
+            // file:// プロトコル直接起動の検知と案内
+            if (window.location.protocol === 'file:') {
+                const modal = document.getElementById("fileProtocolModal");
+                if (modal) modal.classList.remove("hidden");
+                return;
+            }
+
             const loading = document.getElementById("loading");
             loading.classList.remove("hidden");
             try {
@@ -733,7 +742,7 @@
 
             } catch (e) {
                 console.error(e);
-                alert("データの読み込みに失敗しました。");
+                alert("データの読み込みに失敗しました。サーバーが起動しているか確認してください。");
             } finally {
                 loading.classList.add("hidden");
             }
@@ -1663,6 +1672,280 @@
                 content.innerHTML = '<div class="text-red-400 text-center py-4">情報の取得に失敗しました</div>';
             }
         }
+
+        // ==========================================
+        // 一般ユーザー向け 雨量・R'地中水分グラフモーダル制御
+        // ==========================================
+        let rainfallChartInstance = null;
+
+        function openRainfallChartModal(stationName) {
+            const modal = document.getElementById('rainfallChartModal');
+            if (!modal) return;
+
+            const timeSeriesData = window.RainfallEngine.getStationTimeSeries(stationName);
+            if (!timeSeriesData) {
+                alert('観測局の時系列データを取得できませんでした。');
+                return;
+            }
+
+            const { station, summary, current, labels, rainSeries, rprimeSeries, riskAdvice } = timeSeriesData;
+
+            // タイトル・ヘッダー更新
+            document.getElementById('chartStationTitle').textContent = `${station.city} ${station.name} 観測局`;
+            document.getElementById('chartStationSub').textContent = `広島防災WEB 定時表 第${station.row}局 | 座標: ${station.lat.toFixed(4)}, ${station.lon.toFixed(4)}`;
+
+            // 防災アドバイスカードの更新
+            const adviceCard = document.getElementById('chartAdviceCard');
+            adviceCard.className = `p-3 rounded-xl border ${riskAdvice.bgClass} ${riskAdvice.borderClass} space-y-1.5`;
+            
+            document.getElementById('chartRiskBadge').textContent = riskAdvice.badgeText;
+            document.getElementById('chartRiskBadge').className = `text-[11px] font-bold px-2 py-0.5 rounded text-white ${riskAdvice.badgeBg}`;
+            document.getElementById('chartRiskHeadline').textContent = riskAdvice.headline;
+            document.getElementById('chartRiskDetail').textContent = riskAdvice.detail;
+
+            // 雨後の地中水分警告
+            const groundWaterWarning = document.getElementById('chartGroundWaterWarning');
+            if (riskAdvice.isGroundWaterAlert) {
+                groundWaterWarning.classList.remove('hidden');
+                document.getElementById('chartGroundWaterText').textContent = riskAdvice.groundWaterMsg;
+            } else {
+                groundWaterWarning.classList.add('hidden');
+            }
+
+            // 避難マージン
+            document.getElementById('chartMarginText').textContent = riskAdvice.marginMsg;
+
+            // Chart.js 描画
+            const ctx = document.getElementById('rainfallChartCanvas').getContext('2d');
+            if (rainfallChartInstance) {
+                rainfallChartInstance.destroy();
+            }
+
+            // 危険基準ライン用のデータ
+            const dangerLine = Array(labels.length).fill(250);
+            const cautionLine = Array(labels.length).fill(175);
+            const watchLine = Array(labels.length).fill(125);
+
+            rainfallChartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: '降水量 (mm/h)',
+                            data: rainSeries,
+                            type: 'bar',
+                            backgroundColor: 'rgba(59, 130, 246, 0.6)',
+                            borderColor: 'rgba(37, 99, 235, 1)',
+                            borderWidth: 1,
+                            yAxisID: 'yRain',
+                            order: 3
+                        },
+                        {
+                            label: 'R\' 実効雨量（土砂崩壊リスク）',
+                            data: rprimeSeries,
+                            type: 'line',
+                            borderColor: '#dc2626',
+                            backgroundColor: 'rgba(220, 38, 38, 0.1)',
+                            borderWidth: 2.5,
+                            pointRadius: labels.length > 50 ? 0 : 2,
+                            pointHoverRadius: 4,
+                            fill: true,
+                            tension: 0.2,
+                            yAxisID: 'yRprime',
+                            order: 1
+                        },
+                        {
+                            label: '危険ライン (R\'=250 避難指示)',
+                            data: dangerLine,
+                            type: 'line',
+                            borderColor: 'rgba(220, 38, 38, 0.7)',
+                            borderWidth: 1.5,
+                            borderDash: [4, 4],
+                            pointRadius: 0,
+                            fill: false,
+                            yAxisID: 'yRprime',
+                            order: 2
+                        },
+                        {
+                            label: '警戒ライン (R\'=175 高齢者等避難)',
+                            data: cautionLine,
+                            type: 'line',
+                            borderColor: 'rgba(234, 88, 12, 0.7)',
+                            borderWidth: 1.5,
+                            borderDash: [4, 4],
+                            pointRadius: 0,
+                            fill: false,
+                            yAxisID: 'yRprime',
+                            order: 2
+                        },
+                        {
+                            label: '注意ライン (R\'=125 大雨注意報)',
+                            data: watchLine,
+                            type: 'line',
+                            borderColor: 'rgba(234, 179, 8, 0.7)',
+                            borderWidth: 1.5,
+                            borderDash: [3, 3],
+                            pointRadius: 0,
+                            fill: false,
+                            yAxisID: 'yRprime',
+                            order: 2
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                boxWidth: 12,
+                                font: { size: 10 }
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                            padding: 8,
+                            titleFont: { size: 11 },
+                            bodyFont: { size: 10 }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(0,0,0,0.05)' },
+                            ticks: {
+                                maxRotation: 0,
+                                autoSkip: true,
+                                maxTicksLimit: 12,
+                                font: { size: 9 }
+                            }
+                        },
+                        yRain: {
+                            type: 'linear',
+                            position: 'left',
+                            title: { display: true, text: '降水量 (mm/h)', font: { size: 10 } },
+                            min: 0,
+                            grid: { color: 'rgba(0,0,0,0.05)' },
+                            ticks: { font: { size: 9 } }
+                        },
+                        yRprime: {
+                            type: 'linear',
+                            position: 'right',
+                            title: { display: true, text: 'R\' 実効雨量（土砂指標）', font: { size: 10 } },
+                            min: 0,
+                            suggestedMax: 300,
+                            grid: { drawOnChartArea: false },
+                            ticks: { font: { size: 9 } }
+                        }
+                    }
+                }
+            });
+
+            modal.classList.remove('hidden');
+        }
+
+        function closeRainfallChartModal() {
+            const modal = document.getElementById('rainfallChartModal');
+            if (modal) modal.classList.add('hidden');
+        }
+    </script>
+
+    <!-- ======================================================== -->
+    <!-- 雨量＆地中水分R'時系列グラフモーダル（一般ユーザー向け） -->
+    <!-- ======================================================== -->
+    <div id="rainfallChartModal" class="hidden fixed inset-0 z-[3000] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 md:p-6 transition-all">
+        <div class="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <!-- モーダルヘッダー -->
+            <div class="flex justify-between items-start p-4 border-b border-slate-100 bg-slate-50/80 flex-none">
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span class="w-2.5 h-2.5 rounded-full bg-blue-600 animate-pulse"></span>
+                        <h2 id="chartStationTitle" class="text-base font-bold text-gray-900">雨量観測局</h2>
+                    </div>
+                    <p id="chartStationSub" class="text-[11px] text-gray-500 mt-0.5">広島防災WEB 実測データ</p>
+                </div>
+                <button onclick="closeRainfallChartModal()" class="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800 flex items-center justify-center transition cursor-pointer">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+
+            <!-- モーダル本文（スクロール可） -->
+            <div class="p-4 overflow-y-auto space-y-3.5 flex-grow">
+                <!-- 防災アドバイスカード -->
+                <div id="chartAdviceCard" class="p-3 rounded-xl border bg-blue-50 border-blue-200 space-y-1.5">
+                    <div class="flex items-center justify-between">
+                        <span id="chartRiskBadge" class="text-[11px] font-bold px-2 py-0.5 rounded text-white bg-blue-600">平常</span>
+                        <span class="text-[10px] text-gray-500 font-medium">土砂災害リスク診断</span>
+                    </div>
+                    <div id="chartRiskHeadline" class="text-sm font-bold text-gray-900">現在の土砂災害危険度は平常レベルです</div>
+                    <p id="chartRiskDetail" class="text-xs text-gray-600 leading-relaxed"></p>
+
+                    <!-- 雨後の地中水分警告（隠れた危険） -->
+                    <div id="chartGroundWaterWarning" class="hidden mt-2 p-2.5 rounded-lg bg-amber-50 border border-amber-300 text-amber-900 text-xs font-medium flex items-start gap-2">
+                        <span class="text-base flex-none">⚠️</span>
+                        <div id="chartGroundWaterText" class="leading-relaxed">雨は弱まりましたが、地中には大量の水分が残っています。斜面から離れてください。</div>
+                    </div>
+
+                    <!-- 避難判断マージン -->
+                    <div class="text-[11px] text-gray-500 flex items-center gap-1 pt-1 border-t border-slate-200/60">
+                        <span>⏱ 避難目安:</span>
+                        <span id="chartMarginText" class="font-bold text-gray-700">通常レベル</span>
+                    </div>
+                </div>
+
+                <!-- グラフエリア -->
+                <div class="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-xs font-bold text-gray-700">🌧 降水量 ＆ R'（地中水分・土砂指標）時系列推移</span>
+                        <span class="text-[10px] text-gray-400">10分毎実測</span>
+                    </div>
+                    <div class="h-64 w-full relative">
+                        <canvas id="rainfallChartCanvas"></canvas>
+                    </div>
+                    <p class="text-[10px] text-gray-400 mt-2 text-center">
+                        ※ 赤線（R'）が上部の赤点線（250）に近づくほど、山の保水限界を超えて土砂崩れ・土石流の危険が極めて高くなります。
+                    </p>
+                </div>
+            </div>
+
+            <!-- モーダルフッター -->
+            <div class="p-3 bg-gray-50 border-t border-gray-100 flex justify-end flex-none">
+                <button onclick="closeRainfallChartModal()" class="px-4 py-1.5 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-xs font-bold transition">閉じる</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======================================================== -->
+    <!-- file:// プロトコル起動時の案内モーダル -->
+    <!-- ======================================================== -->
+    <div id="fileProtocolModal" class="hidden fixed inset-0 z-[9999] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 text-center space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            <div class="w-14 h-14 rounded-2xl bg-blue-100 text-blue-600 flex items-center justify-center mx-auto text-2xl shadow-inner">
+                🚀
+            </div>
+            <div class="space-y-1">
+                <h2 class="text-lg font-bold text-gray-900">GioVision Hiroshima</h2>
+                <p class="text-xs text-gray-500">ワンクリック起動のご案内</p>
+            </div>
+            <div class="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 text-left space-y-1">
+                <div class="font-bold flex items-center gap-1">
+                    <span>⚠️ ブラウザの直接オープンが検知されました</span>
+                </div>
+                <p class="text-[11px] leading-relaxed">
+                    ブラウザのセキュリティ制限（ローカルファイルへのfetch制限）により、地盤データ・雨量データが読み込めません。
+                </p>
+            </div>
+            <div class="text-left space-y-2 text-xs bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                <div class="font-bold text-gray-800">【最も簡単な起動方法】</div>
+                <ol class="list-decimal list-inside space-y-1 text-gray-600 text-[11px]">
+                    <li>本フォルダ内の <strong class="text-blue-600">「GioVision起動.command」</strong> をダブルクリック</li>
+                    <li>自動的にローカルサーバーが起動し、ブラウザで開きます</li>
+                </ol>
+            </div>
+            <p class="text-[10px] text-gray-400">またはターミナルで <code class="bg-gray-100 px-1 py-0.5 rounded">npm start</code> を実行してください</p>
+        </div>
+    </div>
     </script>
 </body>
 

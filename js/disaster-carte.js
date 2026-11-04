@@ -107,19 +107,27 @@ window.DisasterCarte = (function () {
             rankSummary = '複合的な災害リスク（土砂崩落・液状化・浸水）が高く、早期避難が必要な地点です。';
         }
 
+        // 地盤特性に応じた土砂限界補正 (マサ土・風化花崗岩や表層軟弱層)
+        const isVulnerableSoil = isGraniteOrMasa || (seismic.avs30 < 200);
+        const criticalRprime = isVulnerableSoil ? 185 : 250;
+
         // 防災提言リスト
         const recommendations = [];
-        if (curRprime >= 250 || curCumulative >= 200) {
+        if (curRprime >= criticalRprime || curCumulative >= 200) {
             recommendations.push({
                 type: 'urgent',
-                title: '土砂災害への厳重警戒（避難指示相当）',
-                desc: `降り始めからの累加雨量が【${curCumulative}mm】(R'=${curRprime})に達し、土壌が完全飽和状態です。斜面近傍から直ちに離れ、指定避難所または建物の2階以上山側反対側へ退避してください。`
+                title: isVulnerableSoil && curRprime < 250
+                    ? `【地盤脆弱性アラート】早期土砂災害警戒 (R'=${curRprime})`
+                    : '土砂災害への厳重警戒（避難指示相当）',
+                desc: isVulnerableSoil && curRprime < 250
+                    ? `この地点は風化花崗岩（マサ土）や軟弱層を含み地盤が脆いため、通常基準（250）より早い段階（R'=${criticalRprime}）で崩壊リスクが限界に達します。斜面から直ちに離れ、早めの垂直避難・指定避難所への移動を行ってください。`
+                    : `降り始めからの累加雨量が【${curCumulative}mm】(R'=${curRprime})に達し、土壌が完全飽和状態です。斜面近傍から直ちに離れ、指定避難所または建物の2階以上山側反対側へ退避してください。`
             });
-        } else if (curRprime >= 175 || curCumulative >= 150) {
+        } else if (curRprime >= 125 || curCumulative >= 120) {
             recommendations.push({
                 type: 'warning',
-                title: '土砂災害警戒（高齢者等避難相当）',
-                desc: `降り始めからの累加雨量が【${curCumulative}mm】(R'=${curRprime})に達しています。土砂災害警戒情報基準に達しているため、斜面付近にお住まいの方は避難準備を整えてください。`
+                title: '土砂災害注意（地盤水分蓄積中）',
+                desc: `降り始めからの累加雨量が【${curCumulative}mm】(R'=${curRprime})に達しています。地中に雨水が浸透して地盤強度が低下しやすくなっているため、斜面付近にお住まいの方は気象情報と前兆現象に十分注意してください。`
             });
         }
 
@@ -328,6 +336,15 @@ window.DisasterCarte = (function () {
                         <span>最寄り観測局: <strong>${near.city || ''} ${near.name || '-'}</strong> (第${near.row || '-'}行)</span>
                         <span>距離: ${near.distKm || 0}km</span>
                     </div>
+
+                    ${near.name ? `
+                        <div class="pt-2">
+                            <button onclick="openRainfallChartModal('${near.name}')"
+                                    class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-1.5 px-3 rounded-lg text-xs shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer">
+                                <span>📊 最寄り観測局 (${near.name}) の雨量・地中水分グラフを見る</span>
+                            </button>
+                        </div>
+                    ` : ''}
                 </div>
 
                 <!-- 総合コメント -->

@@ -707,12 +707,135 @@ window.RainfallEngine = (function () {
                             <span>${currentMode === 'heisei30' ? '平成30年7月豪雨' : '最新観測'}</span>
                             <span>${timeInfo}</span>
                         </div>
+
+                        <!-- 一般ユーザー向け 時系列グラフモーダル起動ボタン -->
+                        <div class="pt-1">
+                            <button onclick="openRainfallChartModal('${s.name}')"
+                                    class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-1.5 px-2 rounded-lg text-xs shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer">
+                                <span>📊 雨量＆地中水分グラフを見る</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
             `;
             marker.bindPopup(popupContent);
             stationsLayerGroup.addLayer(marker);
         });
+    }
+
+    /**
+     * 観測局の時系列雨量・R'実効雨量および一般ユーザー向け防災アドバイスの生成
+     */
+    function getStationTimeSeries(stationName) {
+        if (!activeData || !stations) return null;
+        const targetStation = stations.find(s => s.name === stationName);
+        if (!targetStation) return null;
+
+        const timeSeries = activeData.timeSeries || {};
+        const timeSeriesRprime = activeData.timeSeriesRprime || {};
+        const summary = activeData.summary?.[targetStation.row] || {};
+        const currentData = activeStationData[stationName] || {};
+
+        const labels = [];
+        const rainSeries = [];
+        const rprimeSeries = [];
+
+        // グラフ描画用タイムスタンプ（間引き処理: 100件超は3スロット毎、200件超は6スロット=1時間毎）
+        const stepInterval = timestamps.length > 200 ? 6 : (timestamps.length > 100 ? 3 : 1);
+
+        for (let i = 0; i < timestamps.length; i++) {
+            const ts = timestamps[i];
+            if (i % stepInterval !== 0 && i !== timestamps.length - 1) continue;
+
+            const parts = ts.split(' ');
+            let shortTs = ts;
+            if (parts.length === 2) {
+                const datePart = parts[0];
+                const timePart = parts[1];
+                const m = parseInt(datePart.substring(4, 6), 10);
+                const d = parseInt(datePart.substring(6, 8), 10);
+                shortTs = `${m}/${d} ${timePart}`;
+            }
+            labels.push(shortTs);
+
+            const r60 = timeSeries[ts]?.[stationName] ?? 0;
+            const rp = timeSeriesRprime[ts]?.[stationName] ?? 0;
+            rainSeries.push(r60);
+            rprimeSeries.push(rp);
+        }
+
+        const curRprime = currentData.rprime ?? 0;
+        const curRain60 = currentData.max60 ?? 0;
+        const maxRprime = summary.maxRprime ?? curRprime;
+
+        let riskAdvice = {
+            level: 'normal',
+            badgeText: '平常（警戒解除）',
+            badgeBg: 'bg-blue-600',
+            bgClass: 'bg-blue-50/70',
+            borderClass: 'border-blue-200',
+            headline: '現在の土砂災害危険度は平常レベルです',
+            detail: '現時点では山や斜面の保水力に十分な余裕があります。今後の降雨情報や土砂ハザードマップをご確認ください。',
+            isGroundWaterAlert: false,
+            groundWaterMsg: '',
+            marginMsg: '通常（危険基準値まで十分な余裕があります）'
+        };
+
+        if (curRprime >= 250) {
+            riskAdvice = {
+                level: 'danger',
+                badgeText: '極めて危険（避難指示相当）',
+                badgeBg: 'bg-red-600',
+                bgClass: 'bg-red-50',
+                borderClass: 'border-red-300',
+                headline: '山が耐えられる水分限界を超えています！直ちに避難してください',
+                detail: '地中の水分量が飽和状態に達し、土石流やがけ崩れがいつ起きてもおかしくありません。周囲の安全な避難所、または建物の2階以上（山と反対側の部屋）へ緊急避難してください。',
+                isGroundWaterAlert: curRain60 < 10,
+                groundWaterMsg: '雨が小降りになったり止んでいても、地盤内部の水分（R\'）は依然として危険域にあります。絶対に斜面や渓流に近づかないでください。',
+                marginMsg: '限界超過中（直ちに身を守る行動をとってください）'
+            };
+        } else if (curRprime >= 175) {
+            riskAdvice = {
+                level: 'caution',
+                badgeText: '警戒（高齢者等避難相当）',
+                badgeBg: 'bg-orange-600',
+                bgClass: 'bg-orange-50',
+                borderClass: 'border-orange-300',
+                headline: '土砂崩れのリスクが非常に高まっています。高齢者等は避難を開始してください',
+                detail: '過去の土砂災害が多発し始める危険水準です。夜間になって周囲が見えなくなる前、雨足がさらに強まる前に、安全な場所への移動を開始してください。',
+                isGroundWaterAlert: curRain60 < 5,
+                groundWaterMsg: '降雨の峠を越えても、地中の水分が抜けるまで数時間は危険な状態が続きます。引き続き警戒を緩めないでください。',
+                marginMsg: 'あと強い雨（約25mm/h）が30〜60分継続すると、避難指示レベル（R\'=250）に達します'
+            };
+        } else if (curRprime >= 125) {
+            riskAdvice = {
+                level: 'watch',
+                badgeText: '注意（大雨注意報レベル）',
+                badgeBg: 'bg-yellow-500',
+                bgClass: 'bg-yellow-50',
+                borderClass: 'border-yellow-300',
+                headline: '地盤に雨水が浸透しています。今後の雨の強まりに注意してください',
+                detail: '斜面の小石の転がり、湧き水の濁り、地鳴りなど、土砂災害の前兆現象に注意してください。ハザードマップで避難経路を再確認しておきましょう。',
+                isGroundWaterAlert: false,
+                groundWaterMsg: '',
+                marginMsg: 'あと激しい雨（30mm/h）が約1〜2時間続くと、高齢者等避難レベル（R\'=175）に達します'
+            };
+        } else {
+            if (maxRprime >= 175 && currentTimestampIndex === -1) {
+                riskAdvice.headline = `期間中に警戒域（最大 R'=${maxRprime}）を記録しました`;
+                riskAdvice.detail = `対象期間内で土砂災害の危険が大きく高まった時間帯がありました。画面下のタイムラインバーを動かすと、当時の推移を振り返ることができます。`;
+            }
+        }
+
+        return {
+            station: targetStation,
+            summary: summary,
+            current: currentData,
+            labels: labels,
+            rainSeries: rainSeries,
+            rprimeSeries: rprimeSeries,
+            riskAdvice: riskAdvice
+        };
     }
 
     return {
@@ -726,6 +849,7 @@ window.RainfallEngine = (function () {
         loadCustomXlsx,
         evaluateLocationRainfall,
         evaluateMetricLevel,
+        getStationTimeSeries,
         getStationsLayer: () => stationsLayerGroup,
         getStations: () => stations,
         getTimestamps: () => timestamps,
