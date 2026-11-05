@@ -1,11 +1,10 @@
 services:
   - type: web
     name: giov-hiroshima
-    env: node
-    buildCommand: npm install
-    startCommand: node server.js
-    envVars:
-      - key: PORT
-        value: 10000
-      - key: NODE_VERSION
-        value: 22.23.4
+    runtime: static
+    buildCommand: ""
+    staticPublishPath: .
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: public, max-age=0, must-revalidate
