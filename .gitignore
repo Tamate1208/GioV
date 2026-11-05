@@ -1,0 +1,10 @@
+# Dependencies
+node_modules/
+
+# Temporary downloads
+temp_downloads/
+tmp/
+
+# OS files
+.DS_Store
+Thumbs.db
