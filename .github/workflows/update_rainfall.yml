@@ -26,6 +26,12 @@ jobs:
       - name: リポジトリのチェックアウト
         uses: actions/checkout@v4
 
+      - name: Cloudflare WARP のセットアップ (海外IP遮断回避)
+        uses: fscarmen/warp-on-actions@v1.4
+        with:
+          stack: dual
+          mode: wireguard
+
       - name: Node.js 20 のセットアップ
         uses: actions/setup-node@v4
         with:
