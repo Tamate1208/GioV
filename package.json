@@ -4,12 +4,7 @@
   "description": "広島県統合地盤・豪雨・地震動・土砂災害リスクカルテ Web アプリケーション",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "update-rainfall": "node tools/process_rainfall.js"
-  },
-  "dependencies": {
-    "axios": "^1.13.6",
-    "xlsx": "^0.18.5"
+    "start": "node server.js"
   },
   "keywords": [
     "hiroshima",
