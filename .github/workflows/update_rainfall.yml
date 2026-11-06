@@ -66,6 +66,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "データに変更はありませんでした。"
           else
-            git commit -m "data: 雨量・R'データの自動更新 [skip ci]"
+            git commit -m "data: 雨量・R'データの自動更新"
             git push
           fi
